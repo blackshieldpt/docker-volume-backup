@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Run tests
+        run: make test
+
+      - name: Build binaries
+        run: make release
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          shopt -s nullglob
+          for f in docker-volume-backup-*; do
+            sha256sum "$f" > "$f.sha256"
+          done
+
+      - name: Import and configure GPG key
+        if: env.GPG_PRIVATE_KEY != ''
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          echo "Importing GPG private key..."
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import 2>&1
+
+          echo ""
+          echo "Checking for imported secret keys..."
+          if ! gpg --list-secret-keys --keyid-format LONG | grep -q "sec"; then
+            echo "ERROR: No secret key was imported!"
+            echo "The GPG_PRIVATE_KEY secret must contain the PRIVATE key, not the public key."
+            echo ""
+            echo "To export your private key correctly, use:"
+            echo "  gpg --armor --export-secret-keys YOUR_KEY_ID"
+            echo ""
+            echo "What was imported (public keys only):"
+            gpg --list-keys --keyid-format LONG
+            exit 1
+          fi
+
+          echo "Secret keys found:"
+          gpg --list-secret-keys --keyid-format LONG
+
+          echo ""
+          echo "Setting key trust to ultimate..."
+          # Extract the fingerprint (40 chars, on line after 'sec')
+          FINGERPRINT=$(gpg --list-secret-keys --with-colons | grep fpr | head -1 | cut -d':' -f10)
+          # Extract the key ID (16 chars, from the 'sec' line)
+          KEY_ID=$(gpg --list-secret-keys --keyid-format LONG | grep sec | head -1 | awk '{print $2}' | cut -d'/' -f2)
+
+          if [ -z "$FINGERPRINT" ]; then
+            echo "ERROR: Could not extract fingerprint"
+            exit 1
+          fi
+
+          echo "Fingerprint: $FINGERPRINT"
+          echo "Key ID: $KEY_ID"
+
+          echo "$FINGERPRINT:6:" | gpg --import-ownertrust
+
+          echo ""
+          echo "GPG key imported and configured successfully!"
+
+      - name: Sign binaries and checksums
+        if: env.GPG_PRIVATE_KEY != ''
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          # Get the key ID
+          KEY_ID=$(gpg --list-secret-keys --keyid-format LONG | grep sec | awk '{print $2}' | cut -d'/' -f2)
+          echo "Signing files with key: $KEY_ID"
+
+          cd dist
+          for file in docker-volume-backup-*; do
+            # Skip already signed files
+            [[ "$file" == *.asc ]] && continue
+
+            echo "Signing: $file"
+            # Sign with passphrase from stdin
+            echo "$GPG_PASSPHRASE" | gpg --batch --yes --passphrase-fd 0 --pinentry-mode loopback -u "$KEY_ID" --armor --detach-sign "$file"
+          done
+
+          echo ""
+          echo "All files signed successfully!"
+          ls -la *.asc
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
