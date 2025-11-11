@@ -18,14 +18,18 @@ esac
 
 URL="https://github.com/$REPO/releases/download/$VERSION"
 BIN_URL="$URL/$BIN-$OS-$ARCH"
+BIN_TARGET="$BIN-$OS-$ARCH"
 CHECKSUM_URL="$URL/$BIN-$OS-$ARCH.sha256"
 SIG_URL="$URL/$BIN-$OS-$ARCH.asc"
 
+echo BIN_URL $BIN_URL
+
 echo "Downloading $BIN $VERSION for $OS/$ARCH..."
-curl -fsSL "$BIN_URL" -o "$BIN"
+curl -fsSL "$BIN_URL" -o "$BIN_TARGET"
 
 echo "Verifying binary..."
 if command -v gpg >/dev/null 2>&1; then
+
   curl -fsSL "$SIG_URL" -o "$BIN.asc"
   if gpg --verify "$BIN.asc" "$BIN" 2>/dev/null; then
     echo "GPG signature verified"
@@ -42,6 +46,7 @@ else
   rm -f "$BIN.sha256"
 fi
 
+mv "$BIN_TARGET" "$BIN"
 chmod +x "$BIN"
 sudo mv "$BIN" /usr/local/bin/
 
