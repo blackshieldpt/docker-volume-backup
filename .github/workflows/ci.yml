@@ -54,3 +54,4 @@ jobs:
         with:
           name: binaries
           path: dist/*
+          retention-days: 7
